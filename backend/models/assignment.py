@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy import JSON
 
@@ -9,22 +9,33 @@ class Assignment(SQLModel, table=True):
     title: str = Field(index=True)
     description: Optional[str] = None
     subject_area: Optional[str] = Field(default=None, index=True)
-    course_level: Optional[str] = None  # e.g. "undergraduate", "graduate"
+    course_level: Optional[str] = None  # undergraduate | graduate
     tags: Optional[list] = Field(default=None, sa_column=Column(JSON))
     github_url: Optional[str] = None
     github_branch: str = Field(default="main")
 
-    # JSON blob: primary_color, accent_color, font_family, logo_url, header_text
+    # Presentation config — CSS variables injected at serve time; never modifies the file
     presentation_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
+    # ── Substance metadata (displayed alongside the iframe, never injected into HTML) ──
     substance_notes: Optional[str] = None
     learning_objectives: Optional[str] = None
-    file_path: Optional[str] = None      # path to HTML entry file inside storage/
+    prerequisites: Optional[str] = None           # what students need before starting
+    estimated_time: Optional[str] = None           # e.g. "90 minutes"
+    difficulty_level: Optional[str] = None         # introductory | intermediate | advanced
+    assessment_criteria: Optional[str] = None      # how student work is evaluated
+    tools_required: Optional[str] = None           # e.g. "Excel or Google Sheets"
 
+    # Conformance tracking
+    standard_id: Optional[int] = Field(default=None, foreign_key="assignmentstandard.id")
+    conformance_score: Optional[float] = None      # 0.0–1.0, set by AI check
+    review_status: str = Field(default="unreviewed")
+    # unreviewed | under_review | approved | needs_revision
+
+    file_path: Optional[str] = None     # path to HTML entry file inside storage/
     created_by: str = Field(default="anonymous")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-
     download_count: int = Field(default=0)
     is_published: bool = Field(default=True)
 
@@ -41,6 +52,12 @@ class AssignmentCreate(SQLModel):
     github_branch: str = "main"
     substance_notes: Optional[str] = None
     learning_objectives: Optional[str] = None
+    prerequisites: Optional[str] = None
+    estimated_time: Optional[str] = None
+    difficulty_level: Optional[str] = None
+    assessment_criteria: Optional[str] = None
+    tools_required: Optional[str] = None
+    standard_id: Optional[int] = None
     created_by: str = "anonymous"
 
 
@@ -52,6 +69,12 @@ class AssignmentUpdate(SQLModel):
     tags: Optional[list] = None
     substance_notes: Optional[str] = None
     learning_objectives: Optional[str] = None
+    prerequisites: Optional[str] = None
+    estimated_time: Optional[str] = None
+    difficulty_level: Optional[str] = None
+    assessment_criteria: Optional[str] = None
+    tools_required: Optional[str] = None
+    standard_id: Optional[int] = None
     is_published: Optional[bool] = None
 
 
@@ -66,6 +89,14 @@ class AssignmentRead(SQLModel):
     presentation_config: Optional[dict]
     substance_notes: Optional[str]
     learning_objectives: Optional[str]
+    prerequisites: Optional[str]
+    estimated_time: Optional[str]
+    difficulty_level: Optional[str]
+    assessment_criteria: Optional[str]
+    tools_required: Optional[str]
+    standard_id: Optional[int]
+    conformance_score: Optional[float]
+    review_status: str
     created_by: str
     created_at: datetime
     updated_at: datetime

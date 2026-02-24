@@ -1,6 +1,13 @@
 """
 AI service — all calls go to MindRouter2 (University of Idaho gateway).
 Credentials are loaded from .env and NEVER returned to the frontend.
+
+Five AI capabilities:
+  1. generate_description — catalog description from HTML
+  2. suggest_tags — 3-6 topic tags
+  3. analyze_feedback_themes — summarize feedback patterns
+  4. check_conformance — evaluate HTML against assignment standard criteria
+  5. generate_agent_prompt — produce a spec a coding agent can follow to build a conforming assignment
 """
 import json
 import os
@@ -16,9 +23,8 @@ load_dotenv(_env_path)
 
 MINDROUTER2_URL = os.getenv("MINDROUTER2_URL", "").rstrip("/")
 MINDROUTER2_KEY = os.getenv("MINDROUTER2_KEY", "")
-MODEL = "claude-sonnet-4-6"   # model served via MindRouter2
+MODEL = "claude-sonnet-4-6"
 
-# Safety guard: if misconfigured, fail at startup rather than leaking in responses
 if not MINDROUTER2_URL or not MINDROUTER2_KEY:
     import warnings
     warnings.warn(
@@ -35,27 +41,23 @@ def _headers() -> dict:
 
 
 async def _chat(messages: list[dict], max_tokens: int = 512) -> str:
-    """Low-level call to MindRouter2 chat/completions endpoint."""
+    """Low-level call to MindRouter2 messages endpoint."""
     url = f"{MINDROUTER2_URL}/v1/messages"
     payload = {
         "model": MODEL,
         "max_tokens": max_tokens,
         "messages": messages,
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(url, headers=_headers(), json=payload)
         resp.raise_for_status()
         data = resp.json()
-    # Anthropic messages API response shape
     return data["content"][0]["text"].strip()
 
 
+# ── 1. Description Generation ─────────────────────────────────────────────────
+
 async def generate_description(title: str, html_snippet: str) -> Optional[str]:
-    """
-    Given the assignment title and a snippet of its HTML, generate a
-    2-3 sentence catalog description suitable for professors browsing the LMS.
-    Returns None on any error (never leaks internal URLs or credentials).
-    """
     if not MINDROUTER2_URL or not MINDROUTER2_KEY:
         return None
     try:
@@ -73,11 +75,9 @@ async def generate_description(title: str, html_snippet: str) -> Optional[str]:
         return None
 
 
+# ── 2. Tag Suggestion ──────────────────────────────────────────────────────────
+
 async def suggest_tags(title: str, description: str) -> list[str]:
-    """
-    Return a JSON array of 3-6 relevant tags for the assignment.
-    Falls back to [] on any error.
-    """
     if not MINDROUTER2_URL or not MINDROUTER2_KEY:
         return []
     try:
@@ -88,7 +88,6 @@ async def suggest_tags(title: str, description: str) -> list[str]:
             f"No explanation, just the JSON array."
         )
         raw = await _chat([{"role": "user", "content": prompt}], max_tokens=128)
-        # Extract JSON array robustly
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start != -1 and end > start:
@@ -98,15 +97,12 @@ async def suggest_tags(title: str, description: str) -> list[str]:
         return []
 
 
+# ── 3. Feedback Theme Analysis ─────────────────────────────────────────────────
+
 async def analyze_feedback_themes(
     assignment_title: str,
     comments: list[dict],
 ) -> Optional[str]:
-    """
-    Given a list of feedback dicts (author, role, content), return a
-    prose summary of recurring themes for the professor.
-    Returns None on any error.
-    """
     if not MINDROUTER2_URL or not MINDROUTER2_KEY:
         return None
     if not comments:
@@ -114,7 +110,7 @@ async def analyze_feedback_themes(
     try:
         comment_block = "\n".join(
             f"[{c.get('role', 'user')}] {c.get('author', 'anon')}: {c.get('content', '')}"
-            for c in comments[:50]  # cap at 50 to stay within token budget
+            for c in comments[:50]
         )
         prompt = (
             f"You are assisting a professor reviewing feedback on their assignment "
@@ -124,5 +120,122 @@ async def analyze_feedback_themes(
             f"Focus on actionable insights for the professor. Plain prose, no bullet points."
         )
         return await _chat([{"role": "user", "content": prompt}], max_tokens=400)
+    except Exception:
+        return None
+
+
+# ── 4. Conformance Checking ────────────────────────────────────────────────────
+
+async def check_conformance(
+    assignment_title: str,
+    html_content: str,
+    criteria: list[str],
+    recommended: list[str],
+) -> Optional[dict]:
+    """
+    Analyze an assignment's HTML against a set of criteria.
+    Returns:
+      { overall_score: float, met_criteria: [...], missing_criteria: [...],
+        recommendations: [...], ai_analysis: str }
+    """
+    if not MINDROUTER2_URL or not MINDROUTER2_KEY:
+        return None
+    try:
+        # Send a manageable excerpt — first 8000 chars + last 2000 chars
+        excerpt = html_content[:8000]
+        if len(html_content) > 10000:
+            excerpt += f"\n\n... [{len(html_content) - 10000} chars omitted] ...\n\n"
+            excerpt += html_content[-2000:]
+
+        criteria_str = "\n".join(f"  - {c}" for c in criteria)
+        recommended_str = "\n".join(f"  - {r}" for r in recommended)
+
+        prompt = (
+            f"You are an educational technology evaluator for an MPA (Master of Public "
+            f"Administration) Learning Management System.\n\n"
+            f"Assignment: \"{assignment_title}\"\n\n"
+            f"HTML content (excerpt):\n```html\n{excerpt}\n```\n\n"
+            f"REQUIRED criteria to check:\n{criteria_str}\n\n"
+            f"RECOMMENDED (bonus) elements:\n{recommended_str}\n\n"
+            f"Evaluate this assignment. Return a JSON object with exactly these keys:\n"
+            f"- \"overall_score\": float 0.0-1.0 (fraction of REQUIRED criteria met)\n"
+            f"- \"met_criteria\": array of criteria strings that ARE present\n"
+            f"- \"missing_criteria\": array of criteria strings that are NOT present\n"
+            f"- \"recommendations\": array of 3-5 specific, actionable improvement suggestions\n"
+            f"- \"ai_analysis\": 2-3 sentence overall assessment\n\n"
+            f"Return ONLY valid JSON, no markdown formatting."
+        )
+        raw = await _chat([{"role": "user", "content": prompt}], max_tokens=1500)
+        # Extract JSON robustly
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(raw[start:end])
+        return None
+    except Exception:
+        return None
+
+
+# ── 5. Agent Prompt Generation (the "vibe coding" feature) ────────────────────
+
+async def generate_agent_prompt(
+    source_description: str,
+    source_html_snippet: str,
+    standard_name: str,
+    required_sections: list[str],
+    required_elements: list[str],
+    recommended_elements: list[str],
+    technical_requirements: list[str],
+    pedagogical_requirements: list[str],
+    reference_html_snippet: str = "",
+) -> Optional[str]:
+    """
+    Generate a detailed prompt that a professor can hand to a coding AI agent
+    (Claude, Cursor, Copilot, etc.) to build a conforming assignment from
+    raw source material.
+
+    This is the "point a vibe coding agent at a repository" feature.
+    """
+    if not MINDROUTER2_URL or not MINDROUTER2_KEY:
+        return None
+    try:
+        ref_section = ""
+        if reference_html_snippet:
+            ref_section = (
+                f"\n\nREFERENCE IMPLEMENTATION (follow this structural pattern):\n"
+                f"```html\n{reference_html_snippet[:4000]}\n```\n"
+            )
+
+        sections_str = "\n".join(f"  - {s}" for s in required_sections)
+        elements_str = "\n".join(f"  - {e}" for e in required_elements)
+        recommended_str = "\n".join(f"  - {r}" for r in recommended_elements)
+        technical_str = "\n".join(f"  - {t}" for t in technical_requirements)
+        pedagogical_str = "\n".join(f"  - {p}" for p in pedagogical_requirements)
+
+        prompt = (
+            f"You are a specialist in building educational technology for MPA (Master of "
+            f"Public Administration) programs. A professor wants to turn their source "
+            f"material into a fully conforming interactive assignment.\n\n"
+            f"SOURCE MATERIAL DESCRIPTION:\n{source_description}\n\n"
+            f"SOURCE HTML EXCERPT:\n```html\n{source_html_snippet[:3000]}\n```\n\n"
+            f"TARGET STANDARD: \"{standard_name}\"\n\n"
+            f"REQUIRED SECTIONS:\n{sections_str}\n\n"
+            f"REQUIRED INTERACTIVE ELEMENTS:\n{elements_str}\n\n"
+            f"RECOMMENDED ELEMENTS:\n{recommended_str}\n\n"
+            f"TECHNICAL REQUIREMENTS:\n{technical_str}\n\n"
+            f"PEDAGOGICAL REQUIREMENTS:\n{pedagogical_str}\n"
+            f"{ref_section}\n"
+            f"Generate a detailed, ready-to-use PROMPT that a professor can paste directly "
+            f"into Claude, Cursor, or another AI coding assistant. The prompt should:\n"
+            f"1. Describe exactly what to build (structure, sections, interactive elements)\n"
+            f"2. Include the source data and subject matter\n"
+            f"3. Specify the HTML/CSS/JS architecture (single self-contained HTML file)\n"
+            f"4. List every required and recommended feature\n"
+            f"5. Reference the structural pattern from the standard\n\n"
+            f"The output should be a complete, copy-pasteable prompt — NOT the assignment "
+            f"HTML itself. Start the prompt with: \"Build a self-contained interactive "
+            f"HTML assignment for an MPA course...\""
+        )
+        return await _chat([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception:
         return None

@@ -6,93 +6,125 @@ Developer guide for Claude Code and human contributors.
 
 ## Project Overview
 
-An AI-enabled Learning Management System for Local Government budgeting assignments in MPA (Master of Public Administration) courses. Professors can import self-contained HTML assignments from GitHub, customize their visual appearance, annotate them with learning objectives, and discuss them with colleagues — all without ever modifying the assignment's source HTML.
+An AI-enabled Learning Management System for Local Government budgeting assignments in MPA (Master of Public Administration) courses. Professors can import or upload self-contained HTML assignments, run AI conformance checks against defined standards, customize visual presentation without touching source files, conduct structured expert reviews, build curriculum sequences, and use the AI Agent to generate prompts for creating new conforming assignments.
 
 ---
 
 ## Dev Commands
 
-### Backend (run from `lms-platform/` directory)
+### Backend (run from `lms-platform/` directory — NOT the workspace root)
 ```bash
-# Start the API server with hot reload
 uv run uvicorn backend.main:app --reload --port 8000
-
-# Verify startup
 curl http://localhost:8000/api/health
-
-# Run a one-off Python command in the venv
-uv run python -c "from backend.database import create_db_and_tables; create_db_and_tables()"
 ```
 
-### Frontend (run from `lms-platform/frontend/` directory)
+### Frontend (run from `lms-platform/frontend/`)
 ```bash
-npm run dev        # dev server at http://localhost:5173
+npm run dev        # http://localhost:5173, proxies /api → :8000
 npm run build      # production build to dist/
-npm run preview    # preview the production build
 ```
 
-### Both servers must be running for the full app to work.
-The Vite dev server proxies `/api/*` → `http://localhost:8000`.
+Both servers must be running for full functionality.
 
 ---
 
 ## Architecture
 
-### Presentation / Substance Separation (Core Invariant)
-The assignment HTML file on disk is **never modified**. This is intentional and must be preserved:
+### Core Invariant: Presentation / Substance Separation
+The assignment HTML file on disk is **never modified**. This rule cannot be broken:
 
-- `GET /api/assignments/{id}/serve` — reads the original HTML, **injects** a `<style>` block with CSS custom properties, and streams it to the iframe. Nothing is written to disk.
-- `GET /api/assignments/{id}/download` — returns the original file byte-for-byte with `Content-Disposition: attachment`.
-- Substance metadata (`description`, `learning_objectives`, `substance_notes`) lives in the DB and is shown *alongside* the iframe in the React UI — never injected into the HTML.
+- `GET /api/assignments/{id}/serve` injects CSS variables at response time (not written to disk)
+- `GET /api/assignments/{id}/download` returns the file byte-for-byte with no modifications
+- Substance metadata lives in DB columns shown *alongside* the iframe, never injected into HTML
 
-### iframe Isolation
-The React frontend renders assignments inside:
+### Assignment Model
+The reference implementation (excel-revenue-forecasting) defines the pattern:
+- Self-contained single HTML file with all CSS/JS embedded or from CDN
+- Sidebar navigation with progress tracking
+- Progressive tasks with concept cards + worked examples + verification
+- Progressive hints (3 levels per task)
+- Dual verification: quick-check (paste values) + full-check (upload file)
+- Discussion questions with interactive calculators
+- Hidden answer key
+
+### iframe Sandbox
 ```html
-<iframe src="/api/assignments/{id}/serve" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" />
+<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" />
 ```
-This gives the assignment's own JS (Chart.js, SheetJS, etc.) a clean execution context completely isolated from React. Do not remove the `sandbox` attribute or the `allow-same-origin` flag — assignments need both for relative path resolution and file downloads.
+All four flags are required:
+- `allow-scripts`: assignments use Chart.js, SheetJS, custom validation
+- `allow-same-origin`: needed for relative asset path resolution
+- `allow-forms`: student input verification uses form elements
+- `allow-downloads`: SheetJS generates downloadable .xlsx files
 
-### AI Integration (MindRouter2)
-All AI calls are **backend-only** via `backend/services/ai_service.py`. The three AI features are:
+### AI Integration (MindRouter2 — Backend Only)
+Five AI capabilities, all server-side in `backend/services/ai_service.py`:
 
-| Feature | Trigger | Prompt output |
-|---------|---------|---------------|
-| Description generation | GitHub import (background task) | 2–3 sentence catalog description |
-| Tag suggestion | GitHub import (background task) | JSON array of 3–6 tags |
-| Feedback theme analysis | `GET /api/assignments/{id}/feedback/themes` | Prose summary for professor |
+| Capability | Trigger | Output |
+|---|---|---|
+| Description generation | GitHub import / file upload (background) | 2-3 sentence catalog description |
+| Tag suggestion | GitHub import / file upload (background) | JSON array of 3-6 tags |
+| Feedback theme analysis | `GET /api/assignments/{id}/feedback/themes` | Prose summary of feedback patterns |
+| Conformance checking | `POST /api/standards/{id}/check/{assignment_id}` | Score + met/missing criteria + recommendations |
+| Agent prompt generation | `POST /api/standards/{id}/generate-prompt` | Copy-pasteable prompt for AI coding assistants |
 
-**Security rules (never break these):**
-- `MINDROUTER2_URL` and `MINDROUTER2_KEY` must only exist in `.env` (gitignored).
-- They must never be prefixed `VITE_*` or appear in `vite.config.js`.
-- AI error responses must return generic messages, never internal URLs or exception details.
-- No AI credentials are ever returned in any API response body.
+**Security rules:**
+- `MINDROUTER2_URL` and `MINDROUTER2_KEY` exist only in `.env` (gitignored)
+- Never prefixed `VITE_*` or exposed in any API response body
+- Error responses return generic messages, never internal URLs
 
 ### GitHub Import Flow
 ```
-User submits URL → parse_github_url() → get_default_branch() [auto-detects main/master]
-  → fetch_repo_files() → GET /git/trees/{branch}?recursive=1
-  → download each file → save to storage/{id}/original/
-  → detect entry HTML → save DB record → return immediately
-  → BackgroundTask: generate_description() + suggest_tags() → update DB
+parse_github_url() → get_default_branch() [auto-detect main/master]
+  → fetch_repo_files() via /git/trees/{branch}?recursive=1
+  → download each file → storage/{id}/original/
+  → detect_entry_file() → save DB record → return immediately
+  → BackgroundTask: generate_description() + suggest_tags()
 ```
-The import endpoint returns immediately with the assignment record. AI enrichment happens in the background — the frontend will get the description/tags on the next page load or query refetch.
+
+### Assignment Standards & Conformance
+Standards define structural/pedagogical/technical requirements. The AI conformance check:
+1. Reads the assignment HTML from storage
+2. Sends an excerpt + all criteria to MindRouter2
+3. Returns `{ overall_score, met_criteria, missing_criteria, recommendations }`
+4. Updates `assignment.conformance_score` in the DB
+
+### The "Vibe Coding Agent" Feature
+`POST /api/standards/{id}/generate-prompt` takes:
+- Source material description (what the professor wants to teach)
+- An optional source HTML snippet
+- An optional reference assignment (used as a structural template)
+
+It returns a detailed prompt that a professor can paste into Claude, Cursor, or any AI coding assistant to generate a conforming assignment HTML file from scratch.
+
+### Structured Expert Reviews
+Reviews follow a workflow: `submitted → under_review → approved | needs_revision | rejected`
+- Reviews have structured fields: rating, strengths, weaknesses, suggested changes
+- Review status propagates to the assignment (`assignment.review_status`)
+- Dashboard shows "Needs Attention" queue for unreviewed/needs-revision assignments
+
+### Assignment Connections
+Three connection types:
+- `prerequisite`: must complete A before starting B
+- `recommended`: suggested next step
+- `related`: thematically linked
+
+`GET /api/learning-paths` returns the full graph (nodes + edges) for curriculum visualization.
 
 ---
 
-## Database
+## Database Schema
 
-SQLite file at `backend/lms.db` (gitignored). Three tables:
+SQLite at `backend/lms.db` (gitignored). Six tables:
 
 | Table | Key fields |
-|-------|-----------|
-| `assignment` | id, title, description, tags (JSON), presentation_config (JSON), file_path, github_url |
+|---|---|
+| `assignment` | id, title, tags (JSON), presentation_config (JSON), standard_id, conformance_score, review_status, difficulty_level, prerequisites, estimated_time, assessment_criteria, tools_required |
 | `feedback` | id, assignment_id, content, parent_id (threading), role, is_review |
-| `assignmentversion` | id, assignment_id, change_type (presentation/substance), file_snapshot_path |
-
-`presentation_config` JSON shape:
-```json
-{ "primary_color": "#1a56db", "accent_color": "#ff5a1f", "font_family": "Inter, sans-serif", "logo_url": null, "header_text": null }
-```
+| `review` | id, assignment_id, reviewer, status (workflow), overall_rating, strengths, weaknesses, suggested_changes, criteria_scores (JSON) |
+| `assignmentstandard` | id, name, required_sections (JSON), required_elements (JSON), recommended_elements (JSON), technical_requirements (JSON), pedagogical_requirements (JSON) |
+| `assignmentversion` | id, assignment_id, change_type, file_snapshot_path |
+| `assignmentconnection` | id, from_assignment_id, to_assignment_id, connection_type |
 
 ---
 
@@ -104,23 +136,32 @@ backend/storage/
     original/     ← immutable source files (never modified)
     snapshots/    ← v{version_id}.json presentation config snapshots
 ```
-The entire `storage/` directory is gitignored. It is recreated on import.
 
 ---
 
-## Adding a New API Route
+## Adding Features
 
-1. Create or add to a file in `backend/routes/`
-2. Define an `APIRouter` with `prefix` and `tags`
-3. Register it in `backend/routes/__init__.py`
-4. Include it in `backend/main.py` with `app.include_router(router, prefix="/api")`
-5. Add a corresponding function in `frontend/src/lib/api.js`
+### New API Route
+1. Create or extend a file in `backend/routes/`
+2. Define `APIRouter` with `prefix` and `tags`
+3. Register in `backend/routes/__init__.py`
+4. Include in `backend/main.py` with `app.include_router(router, prefix="/api")`
+5. Add functions in `frontend/src/lib/api.js`
+
+### New AI Capability
+1. Add function to `backend/services/ai_service.py`
+2. Guard with `if not MINDROUTER2_URL or not MINDROUTER2_KEY: return None`
+3. Use `_chat()` for the API call
+4. Return `None` on any exception (never leak credentials)
+5. Create a route endpoint that calls the new function
 
 ---
 
 ## Common Pitfalls
 
-- **Running uvicorn from the wrong directory**: Must be run from `lms-platform/`, not the workspace root, because `backend` is a relative package name.
-- **Branch mismatch on import**: The github_service auto-detects the default branch via the GitHub metadata API. If a user includes a branch in the URL (`/tree/main`) it takes precedence.
-- **iframe sandbox too restrictive**: `allow-downloads` is required for SheetJS `.xlsx` export in assignment HTML. Don't tighten the sandbox without testing assignment functionality.
-- **SQLModel JSON columns**: Tags and presentation_config use `sa_column=Column(JSON)`. Pydantic validation does not run on these — validate in the route layer if needed.
+- **Wrong working directory**: `uv run uvicorn backend.main:app` must run from `lms-platform/`, not the workspace root
+- **Stale DB schema**: Delete `backend/lms.db` to recreate tables after model changes
+- **Branch detection**: `github_service.get_default_branch()` handles repos with `main` or `master`
+- **iframe sandbox**: Don't remove `allow-downloads` — breaks SheetJS export
+- **Subject areas are dynamic**: The dashboard `GET /api/dashboard/subject-areas` returns subjects actually in use — no hardcoded list
+- **Review workflow validation**: Status transitions are enforced server-side — `submitted` can only go to `under_review`, etc.

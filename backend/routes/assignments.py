@@ -8,7 +8,7 @@ from typing import Optional
 
 import aiofiles
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlmodel import Session, select
 
@@ -229,6 +229,44 @@ async def import_from_github(
     session.refresh(db_obj)
 
     # Kick off AI enrichment in the background
+    if html_snippet:
+        background_tasks.add_task(
+            _run_ai_enrichment, db_obj.id, db_obj.title, html_snippet
+        )
+
+    return db_obj
+
+
+# ── File Upload ────────────────────────────────────────────────────────────────
+
+@router.post("/upload", response_model=AssignmentRead)
+async def upload_assignment(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    created_by: str = Form(default="anonymous"),
+    session: Session = Depends(get_session),
+):
+    """Direct HTML file upload (alternative to GitHub import)."""
+    if not file.filename or not file.filename.endswith((".html", ".htm")):
+        raise HTTPException(status_code=422, detail="Only .html files are accepted")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds 10 MB limit")
+
+    db_obj = Assignment(
+        title=title,
+        file_path=file.filename,
+        created_by=created_by,
+    )
+    session.add(db_obj)
+    session.commit()
+    session.refresh(db_obj)
+
+    file_service.save_file(db_obj.id, file.filename, content)
+
+    html_snippet = content.decode("utf-8", errors="replace")[:3000]
     if html_snippet:
         background_tasks.add_task(
             _run_ai_enrichment, db_obj.id, db_obj.title, html_snippet

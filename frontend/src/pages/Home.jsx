@@ -1,16 +1,22 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getAssignments } from '../lib/api'
+import { getAssignments, getSubjectAreas } from '../lib/api'
 import AssignmentCard from '../components/AssignmentCard'
 import { Link } from 'react-router-dom'
 
-const SUBJECTS = ['All', 'Budget & Finance', 'Revenue Forecasting', 'Capital Planning', 'Debt Management']
 const LEVELS = ['All', 'undergraduate', 'graduate']
+const REVIEW_FILTERS = ['All', 'approved', 'under_review', 'needs_revision', 'unreviewed']
 
 export default function Home() {
   const [search, setSearch] = useState('')
   const [subject, setSubject] = useState('All')
   const [level, setLevel] = useState('All')
+  const [reviewFilter, setReviewFilter] = useState('All')
+
+  const { data: subjects = [] } = useQuery({
+    queryKey: ['subject-areas'],
+    queryFn: getSubjectAreas,
+  })
 
   const { data: assignments = [], isLoading, error } = useQuery({
     queryKey: ['assignments', { search, subject, level }],
@@ -22,9 +28,13 @@ export default function Home() {
       }),
   })
 
+  // Client-side review status filter
+  const filtered = reviewFilter === 'All'
+    ? assignments
+    : assignments.filter(a => a.review_status === reviewFilter)
+
   return (
     <div>
-      {/* Hero */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Assignment Catalog</h1>
         <p className="mt-1 text-sm text-gray-500">
@@ -33,10 +43,10 @@ export default function Home() {
       </div>
 
       {/* Search + Filters */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <input
           type="text"
-          placeholder="Search assignments…"
+          placeholder="Search assignments..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm shadow-sm focus:outline-none focus:border-brand-400"
@@ -46,18 +56,36 @@ export default function Home() {
           onChange={(e) => setSubject(e.target.value)}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm"
         >
-          {SUBJECTS.map((s) => <option key={s}>{s}</option>)}
+          <option value="All">All Subjects</option>
+          {subjects.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <select
           value={level}
           onChange={(e) => setLevel(e.target.value)}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm"
         >
-          {LEVELS.map((l) => <option key={l}>{l === 'All' ? 'All Levels' : l}</option>)}
+          {LEVELS.map((l) => <option key={l} value={l}>{l === 'All' ? 'All Levels' : l}</option>)}
         </select>
+      </div>
+
+      {/* Review status filter chips */}
+      <div className="flex gap-2 mb-6">
+        {REVIEW_FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setReviewFilter(f)}
+            className={`text-xs px-3 py-1 rounded-full border transition-colors capitalize ${
+              reviewFilter === f
+                ? 'bg-brand-600 text-white border-brand-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-brand-300'
+            }`}
+          >
+            {f === 'All' ? 'All Statuses' : f.replace('_', ' ')}
+          </button>
+        ))}
         <Link
           to="/submit"
-          className="bg-brand-600 text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-brand-700 transition-colors whitespace-nowrap"
+          className="ml-auto bg-brand-600 text-white text-xs font-medium rounded-full px-4 py-1 hover:bg-brand-700 transition-colors"
         >
           + Import
         </Link>
@@ -72,7 +100,7 @@ export default function Home() {
         </div>
       ) : error ? (
         <p className="text-red-500 text-sm">Failed to load assignments. Is the backend running?</p>
-      ) : assignments.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg">No assignments found.</p>
           <p className="text-sm mt-1">
@@ -81,7 +109,7 @@ export default function Home() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {assignments.map((a) => (
+          {filtered.map((a) => (
             <AssignmentCard key={a.id} assignment={a} />
           ))}
         </div>
