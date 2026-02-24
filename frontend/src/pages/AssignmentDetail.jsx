@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useState, useRef, useEffect } from 'react'
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getAssignment, serveUrl, downloadUrl, updateAssignment, deleteAssignment,
@@ -7,6 +7,7 @@ import {
   getConnections, getAssignments, createConnection, deleteConnection,
   getStandards, checkConformance,
   getPresentationHistory,
+  duplicateAssignment,
 } from '../lib/api'
 import PresentationEditor from '../components/PresentationEditor'
 import FeedbackThread from '../components/FeedbackThread'
@@ -23,10 +24,20 @@ const REVIEW_STATUS_STYLES = {
 export default function AssignmentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [tab, setTab] = useState('View')
+  const [searchParams] = useSearchParams()
+  const [tab, setTab] = useState(() => {
+    const t = searchParams.get('tab')
+    return TABS.includes(t) ? t : 'View'
+  })
   const [editingSubstance, setEditingSubstance] = useState(false)
   const iframeRef = useRef(null)
   const queryClient = useQueryClient()
+
+  // Sync tab from URL when navigating (e.g. after variant creation)
+  useEffect(() => {
+    const t = searchParams.get('tab')
+    if (t && TABS.includes(t)) setTab(t)
+  }, [searchParams])
 
   const { data: assignment, isLoading, error } = useQuery({
     queryKey: ['assignment', id],
@@ -100,6 +111,7 @@ export default function AssignmentDetail() {
           >
             Download Original
           </a>
+          <VariantDropdown assignmentId={parseInt(id)} navigate={navigate} />
           <button
             onClick={() => { if (confirm('Delete this assignment?')) deleteMutation.mutate() }}
             className="text-sm text-red-500 border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50 transition-colors"
@@ -176,6 +188,69 @@ export default function AssignmentDetail() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+
+// ── Variant Dropdown ──────────────────────────────────────────────────────────
+
+function VariantDropdown({ assignmentId, navigate }) {
+  const [open, setOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  const handleVisualVariant = async () => {
+    setCreating(true)
+    try {
+      const newAssignment = await duplicateAssignment(assignmentId, { reset_presentation: true })
+      navigate(`/assignments/${newAssignment.id}?tab=Customize`)
+    } catch {
+      alert('Failed to create variant')
+    } finally {
+      setCreating(false)
+      setOpen(false)
+    }
+  }
+
+  const handleContentVariant = () => {
+    setOpen(false)
+    navigate(`/agent?ref=${assignmentId}&mode=convert`)
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        disabled={creating}
+        className="text-sm border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50 transition-colors disabled:opacity-50"
+      >
+        {creating ? 'Creating...' : 'Create Variant'}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-20 w-64 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+            <button
+              onClick={handleVisualVariant}
+              className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors border-b border-gray-100"
+            >
+              <p className="text-sm font-medium text-gray-900">Visual Variant (rebrand)</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Copy files, reset branding. Opens the Customize tab.
+              </p>
+            </button>
+            <button
+              onClick={handleContentVariant}
+              className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
+            >
+              <p className="text-sm font-medium text-gray-900">Content Variant (modify)</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Open the AI Agent with this assignment as reference.
+              </p>
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

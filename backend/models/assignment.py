@@ -26,6 +26,9 @@ class Assignment(SQLModel, table=True):
     assessment_criteria: Optional[str] = None      # how student work is evaluated
     tools_required: Optional[str] = None           # e.g. "Excel or Google Sheets"
 
+    # Variant lineage
+    variant_of: Optional[int] = Field(default=None)
+
     # Conformance tracking
     standard_id: Optional[int] = Field(default=None, foreign_key="assignmentstandard.id")
     conformance_score: Optional[float] = None      # 0.0–1.0, set by AI check
@@ -94,6 +97,7 @@ class AssignmentRead(SQLModel):
     difficulty_level: Optional[str]
     assessment_criteria: Optional[str]
     tools_required: Optional[str]
+    variant_of: Optional[int]
     standard_id: Optional[int]
     conformance_score: Optional[float]
     review_status: str

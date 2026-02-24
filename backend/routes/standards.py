@@ -147,6 +147,8 @@ class AgentPromptRequest(SQLModel):
     source_description: str
     source_html_snippet: str = ""
     reference_assignment_id: Optional[int] = None  # to pull a reference HTML pattern
+    mode: str = "create"  # "create" or "convert"
+    original_format: Optional[str] = None  # e.g. "docx", "pdf", "pptx", "html"
 
 
 class AgentPromptResponse(SQLModel):
@@ -197,6 +199,8 @@ async def generate_agent_prompt(
         technical_requirements=standard.technical_requirements,
         pedagogical_requirements=standard.pedagogical_requirements,
         reference_html_snippet=reference_snippet,
+        mode=req.mode,
+        original_format=req.original_format,
     )
 
     if result is None:

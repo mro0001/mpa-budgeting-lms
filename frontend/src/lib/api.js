@@ -32,6 +32,14 @@ export const uploadAssignment = (formData) =>
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then(r => r.data)
 
+export const extractTextFromFile = (formData) =>
+  api.post('/assignments/extract-text', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const duplicateAssignment = (id, params = {}) =>
+  api.post(`/assignments/${id}/duplicate`, null, { params }).then(r => r.data)
+
 export const serveUrl = (id) => `/api/assignments/${id}/serve`
 
 export const downloadUrl = (id) => `/api/assignments/${id}/download`

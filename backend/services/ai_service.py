@@ -188,13 +188,16 @@ async def generate_agent_prompt(
     technical_requirements: list[str],
     pedagogical_requirements: list[str],
     reference_html_snippet: str = "",
+    mode: str = "create",
+    original_format: Optional[str] = None,
 ) -> Optional[str]:
     """
     Generate a detailed prompt that a professor can hand to a coding AI agent
     (Claude, Cursor, Copilot, etc.) to build a conforming assignment from
     raw source material.
 
-    This is the "point a vibe coding agent at a repository" feature.
+    mode="create": Build from scratch (original behavior).
+    mode="convert": Convert existing document — preserve all original content.
     """
     if not MINDROUTER2_URL or not MINDROUTER2_KEY:
         return None
@@ -212,30 +215,92 @@ async def generate_agent_prompt(
         technical_str = "\n".join(f"  - {t}" for t in technical_requirements)
         pedagogical_str = "\n".join(f"  - {p}" for p in pedagogical_requirements)
 
-        prompt = (
-            f"You are a specialist in building educational technology for MPA (Master of "
-            f"Public Administration) programs. A professor wants to turn their source "
-            f"material into a fully conforming interactive assignment.\n\n"
-            f"SOURCE MATERIAL DESCRIPTION:\n{source_description}\n\n"
-            f"SOURCE HTML EXCERPT:\n```html\n{source_html_snippet[:3000]}\n```\n\n"
-            f"TARGET STANDARD: \"{standard_name}\"\n\n"
-            f"REQUIRED SECTIONS:\n{sections_str}\n\n"
-            f"REQUIRED INTERACTIVE ELEMENTS:\n{elements_str}\n\n"
-            f"RECOMMENDED ELEMENTS:\n{recommended_str}\n\n"
-            f"TECHNICAL REQUIREMENTS:\n{technical_str}\n\n"
-            f"PEDAGOGICAL REQUIREMENTS:\n{pedagogical_str}\n"
-            f"{ref_section}\n"
-            f"Generate a detailed, ready-to-use PROMPT that a professor can paste directly "
-            f"into Claude, Cursor, or another AI coding assistant. The prompt should:\n"
-            f"1. Describe exactly what to build (structure, sections, interactive elements)\n"
-            f"2. Include the source data and subject matter\n"
-            f"3. Specify the HTML/CSS/JS architecture (single self-contained HTML file)\n"
-            f"4. List every required and recommended feature\n"
-            f"5. Reference the structural pattern from the standard\n\n"
-            f"The output should be a complete, copy-pasteable prompt — NOT the assignment "
-            f"HTML itself. Start the prompt with: \"Build a self-contained interactive "
-            f"HTML assignment for an MPA course...\""
-        )
+        if mode == "convert":
+            prompt = _build_conversion_prompt(
+                source_description=source_description,
+                source_content=source_html_snippet,
+                original_format=original_format,
+                standard_name=standard_name,
+                sections_str=sections_str,
+                elements_str=elements_str,
+                recommended_str=recommended_str,
+                technical_str=technical_str,
+                pedagogical_str=pedagogical_str,
+                ref_section=ref_section,
+            )
+        else:
+            prompt = (
+                f"You are a specialist in building educational technology for MPA (Master of "
+                f"Public Administration) programs. A professor wants to turn their source "
+                f"material into a fully conforming interactive assignment.\n\n"
+                f"SOURCE MATERIAL DESCRIPTION:\n{source_description}\n\n"
+                f"SOURCE HTML EXCERPT:\n```html\n{source_html_snippet[:3000]}\n```\n\n"
+                f"TARGET STANDARD: \"{standard_name}\"\n\n"
+                f"REQUIRED SECTIONS:\n{sections_str}\n\n"
+                f"REQUIRED INTERACTIVE ELEMENTS:\n{elements_str}\n\n"
+                f"RECOMMENDED ELEMENTS:\n{recommended_str}\n\n"
+                f"TECHNICAL REQUIREMENTS:\n{technical_str}\n\n"
+                f"PEDAGOGICAL REQUIREMENTS:\n{pedagogical_str}\n"
+                f"{ref_section}\n"
+                f"Generate a detailed, ready-to-use PROMPT that a professor can paste directly "
+                f"into Claude, Cursor, or another AI coding assistant. The prompt should:\n"
+                f"1. Describe exactly what to build (structure, sections, interactive elements)\n"
+                f"2. Include the source data and subject matter\n"
+                f"3. Specify the HTML/CSS/JS architecture (single self-contained HTML file)\n"
+                f"4. List every required and recommended feature\n"
+                f"5. Reference the structural pattern from the standard\n\n"
+                f"The output should be a complete, copy-pasteable prompt — NOT the assignment "
+                f"HTML itself. Start the prompt with: \"Build a self-contained interactive "
+                f"HTML assignment for an MPA course...\""
+            )
         return await _chat([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception:
         return None
+
+
+def _build_conversion_prompt(
+    source_description: str,
+    source_content: str,
+    original_format: Optional[str],
+    standard_name: str,
+    sections_str: str,
+    elements_str: str,
+    recommended_str: str,
+    technical_str: str,
+    pedagogical_str: str,
+    ref_section: str,
+) -> str:
+    """Build the AI prompt for converting an existing document into an interactive assignment."""
+    format_note = f" (extracted from a .{original_format} file)" if original_format else ""
+    return (
+        f"You are a specialist in converting existing educational documents into interactive "
+        f"HTML assignments for MPA (Master of Public Administration) programs.\n\n"
+        f"A professor has an existing document{format_note} they want to convert into a "
+        f"conforming interactive assignment. The CRITICAL rule is: preserve ALL existing "
+        f"questions, data, examples, and instructional content from the original document. "
+        f"Do NOT invent new questions or replace existing content — instead, wrap the existing "
+        f"material in an interactive structure.\n\n"
+        f"PROFESSOR'S CONVERSION INSTRUCTIONS:\n{source_description}\n\n"
+        f"ORIGINAL DOCUMENT CONTENT{format_note}:\n"
+        f"```\n{source_content[:4000]}\n```\n\n"
+        f"TARGET STANDARD: \"{standard_name}\"\n\n"
+        f"REQUIRED SECTIONS:\n{sections_str}\n\n"
+        f"REQUIRED INTERACTIVE ELEMENTS:\n{elements_str}\n\n"
+        f"RECOMMENDED ELEMENTS:\n{recommended_str}\n\n"
+        f"TECHNICAL REQUIREMENTS:\n{technical_str}\n\n"
+        f"PEDAGOGICAL REQUIREMENTS:\n{pedagogical_str}\n"
+        f"{ref_section}\n"
+        f"Generate a detailed, ready-to-use PROMPT that a professor can paste directly "
+        f"into Claude, Cursor, or another AI coding assistant. The prompt MUST:\n"
+        f"1. Include the COMPLETE extracted text from the original document\n"
+        f"2. Explicitly instruct the AI to preserve every question, dataset, and example\n"
+        f"3. Describe how to wrap existing content in the interactive structure "
+        f"(sidebar navigation, progress tracking, concept cards, hints, verification)\n"
+        f"4. Specify the HTML/CSS/JS architecture (single self-contained HTML file)\n"
+        f"5. List every required and recommended feature from the standard\n"
+        f"6. Note that this is a CONVERSION, not creation from scratch — "
+        f"fidelity to the original material is paramount\n\n"
+        f"The output should be a complete, copy-pasteable prompt — NOT the assignment "
+        f"HTML itself. Start the prompt with: \"Convert the following existing assignment "
+        f"document into a self-contained interactive HTML assignment for an MPA course...\""
+    )

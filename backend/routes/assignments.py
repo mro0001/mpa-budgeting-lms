@@ -20,7 +20,7 @@ from ..models import (
     AssignmentUpdate,
     GitHubImportRequest,
 )
-from ..services import file_service, github_service, ai_service
+from ..services import file_service, github_service, ai_service, extraction_service
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -332,3 +332,95 @@ async def download_assignment(
         filename=safe_name,
         headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
     )
+
+
+# ── Text Extraction (for document conversion) ─────────────────────────────────
+
+ALLOWED_EXTRACT_EXTENSIONS = {".html", ".htm", ".docx", ".pdf", ".pptx"}
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
+@router.post("/extract-text")
+async def extract_text_from_file(
+    file: UploadFile = File(...),
+):
+    """
+    Extract text from an uploaded document for the conversion workflow.
+    Stateless — does not store the file, just extracts and returns text.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="No filename provided")
+
+    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_EXTRACT_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported file type: {ext}. Allowed: {', '.join(sorted(ALLOWED_EXTRACT_EXTENSIONS))}",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds 20 MB limit")
+
+    try:
+        extracted = extraction_service.extract_text(file.filename, content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return {
+        "filename": file.filename,
+        "file_type": ext.lstrip("."),
+        "extracted_text": extracted,
+        "char_count": len(extracted),
+    }
+
+
+# ── Duplicate (for assignment variants) ───────────────────────────────────────
+
+@router.post("/{assignment_id}/duplicate", response_model=AssignmentRead)
+def duplicate_assignment(
+    assignment_id: int,
+    reset_presentation: bool = Query(default=True),
+    session: Session = Depends(get_session),
+):
+    """
+    Create a copy of an assignment (files + DB record) for variant creation.
+    Resets review_status and download_count. Sets variant_of to source ID.
+    """
+    source = session.get(Assignment, assignment_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    new_obj = Assignment(
+        title=f"{source.title} (variant)",
+        description=source.description,
+        subject_area=source.subject_area,
+        course_level=source.course_level,
+        tags=list(source.tags) if source.tags else None,
+        github_url=source.github_url,
+        github_branch=source.github_branch,
+        file_path=source.file_path,
+        presentation_config=None if reset_presentation else (
+            dict(source.presentation_config) if source.presentation_config else None
+        ),
+        substance_notes=source.substance_notes,
+        learning_objectives=source.learning_objectives,
+        prerequisites=source.prerequisites,
+        estimated_time=source.estimated_time,
+        difficulty_level=source.difficulty_level,
+        assessment_criteria=source.assessment_criteria,
+        tools_required=source.tools_required,
+        standard_id=source.standard_id,
+        variant_of=source.id,
+        review_status="unreviewed",
+        download_count=0,
+        created_by=source.created_by,
+    )
+    session.add(new_obj)
+    session.commit()
+    session.refresh(new_obj)
+
+    # Copy files from source to new assignment's storage
+    file_service.copy_assignment_files(assignment_id, new_obj.id)
+
+    return new_obj

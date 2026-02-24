@@ -45,6 +45,18 @@ def get_entry_file(assignment_id: int, file_path: str) -> Path:
     return assignment_original_dir(assignment_id) / file_path
 
 
+def copy_assignment_files(source_id: int, dest_id: int) -> None:
+    """Copy all files from one assignment's storage to another."""
+    src = assignment_original_dir(source_id)
+    if not src.exists():
+        return
+    dest = assignment_original_dir(dest_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest)
+    # Create snapshots dir for the new assignment
+    assignment_snapshots_dir(dest_id).mkdir(parents=True, exist_ok=True)
+
+
 def delete_assignment_files(assignment_id: int) -> None:
     dir_path = STORAGE_ROOT / str(assignment_id)
     if dir_path.exists():
