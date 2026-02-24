@@ -2,17 +2,21 @@
 
 An AI-enabled Learning Management System for Local Government budgeting assignments in MPA (Master of Public Administration) courses.
 
-Professors can **import** self-contained HTML assignments from GitHub, **customize** their visual appearance without touching the source, **annotate** them with learning objectives, and **discuss** them with colleagues — all in one platform.
+Professors can **import** or **upload** self-contained HTML assignments, define and enforce **assignment standards**, run **AI conformance checks**, conduct **structured expert reviews**, customize **visual presentation** without touching the source, build **curriculum sequences**, and use the **AI Agent** to generate prompts for creating new conforming assignments from raw course material.
 
 ---
 
 ## Features
 
-- **GitHub Import** — paste any GitHub repo URL; the platform downloads all files, detects the entry HTML, and auto-generates a catalog description + tags via AI (background task)
-- **Presentation / Substance Separation** — change colors, fonts, and header banners without ever modifying the assignment's HTML. The "Download Original" button always delivers the pristine source file
-- **Interactive iframe Rendering** — assignments run in an isolated `<iframe>` so their JavaScript (Chart.js, SheetJS, interactive quizzes) works perfectly without conflicting with React
-- **Threaded Feedback** — professors, subject-matter experts, and students can comment with threaded replies; an AI "Summarize Themes" button distills patterns across all comments
-- **Dashboard** — live stats on downloads, top assignments, recent feedback, and a topic tag cloud
+- **Assignment Standards** — define structural, pedagogical, and technical requirements for conforming assignments, based on the excel-revenue-forecasting reference pattern (sidebar navigation, progressive tasks, verification, discussion questions, answer key)
+- **AI Conformance Checking** — evaluate any assignment against a standard; the AI reads the HTML and reports which criteria are met, which are missing, and gives specific improvement recommendations with a 0-100% score
+- **AI Agent Prompt Generator** — the "vibe coding" feature: describe your raw course material, select a standard and optionally a reference assignment, and the AI generates a detailed, copy-pasteable prompt you can hand to Claude, Cursor, or Copilot to build a conforming interactive assignment from scratch
+- **GitHub Import + File Upload** — paste a GitHub repo URL (auto-detects default branch) or drag-and-drop an HTML file directly; AI generates a catalog description + tags in the background
+- **Presentation / Substance Separation** — change colors, fonts, and header banners without ever modifying the assignment's HTML; the "Download Original" button always delivers the pristine source file
+- **Structured Expert Reviews** — formal review workflow (submitted > under review > approved/needs revision) with ratings, strengths, weaknesses, and suggested changes; review status shown on catalog cards and dashboard
+- **Threaded Feedback** — professors, experts, and students comment with threaded replies; AI "Summarize Themes" button distills patterns across all comments
+- **Assignment Connections** — link assignments as prerequisites, recommended next steps, or related topics to build curriculum sequences; `GET /api/learning-paths` returns the full graph
+- **Quality Dashboard** — completeness metrics (descriptions, objectives, reviews, conformance), review status breakdown, pending review queue, difficulty distribution, dynamic tag cloud, and top downloads
 
 ---
 
@@ -99,10 +103,12 @@ mpa-budgeting-lms/
         │   ├── PresentationEditor.jsx Color/font/banner controls
         │   └── FeedbackThread.jsx Threaded comments + AI analysis
         └── pages/
-            ├── Home.jsx          Catalog with search/filter
-            ├── AssignmentDetail.jsx iframe + 3-tab detail panel
-            ├── Submit.jsx        GitHub import wizard
-            └── Dashboard.jsx     Stats + tag cloud
+            ├── Home.jsx           Catalog with search/filter/review status
+            ├── AssignmentDetail.jsx iframe + 5-tab panel (View/Customize/Discuss/Reviews/Connections)
+            ├── Submit.jsx         GitHub import + file upload
+            ├── Standards.jsx      View/create assignment standards
+            ├── AgentPrompt.jsx    AI Agent prompt generator
+            └── Dashboard.jsx      Quality metrics + review queue + tag cloud
 ```
 
 ---
@@ -112,23 +118,45 @@ mpa-budgeting-lms/
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Service health check |
-| GET | `/api/assignments` | List catalog (supports `search`, `subject_area`, `course_level`) |
-| GET | `/api/assignments/{id}` | Single assignment |
-| POST | `/api/assignments/import` | Import from GitHub URL |
+| | **Assignments** | |
+| GET | `/api/assignments` | List catalog (search, subject_area, course_level filters) |
+| GET | `/api/assignments/{id}` | Single assignment with all metadata |
+| POST | `/api/assignments/import` | Import from GitHub URL (auto-detects branch) |
+| POST | `/api/assignments/upload` | Direct HTML file upload (multipart form) |
 | PATCH | `/api/assignments/{id}` | Update substance metadata |
 | DELETE | `/api/assignments/{id}` | Delete assignment + files |
 | GET | `/api/assignments/{id}/serve` | HTML with presentation CSS injected (iframe src) |
 | GET | `/api/assignments/{id}/download` | Original unmodified file download |
+| | **Presentation** | |
 | PUT | `/api/assignments/{id}/presentation` | Update visual config (creates version record) |
-| GET | `/api/assignments/{id}/presentation/history` | List presentation versions |
+| GET | `/api/assignments/{id}/presentation/history` | List presentation version history |
+| | **Feedback & Reviews** | |
 | GET | `/api/assignments/{id}/feedback` | List threaded comments |
 | POST | `/api/assignments/{id}/feedback` | Add comment |
-| DELETE | `/api/assignments/{id}/feedback/{fid}` | Delete comment |
-| GET | `/api/assignments/{id}/feedback/themes` | AI analysis of all feedback |
+| GET | `/api/assignments/{id}/feedback/themes` | AI theme analysis of all feedback |
+| GET | `/api/assignments/{id}/reviews` | List structured expert reviews |
+| POST | `/api/assignments/{id}/reviews` | Submit a formal review |
+| PATCH | `/api/reviews/{id}/status` | Update review status (workflow transition) |
+| | **Standards & Conformance** | |
+| GET | `/api/standards` | List active assignment standards |
+| POST | `/api/standards` | Create a new standard |
+| GET | `/api/standards/{id}` | Get standard with all criteria |
+| PUT | `/api/standards/{id}` | Update a standard |
+| POST | `/api/standards/{id}/check/{assignment_id}` | AI conformance check |
+| POST | `/api/standards/{id}/generate-prompt` | AI Agent prompt generator |
+| | **Connections** | |
+| GET | `/api/assignments/{id}/connections` | List connections for an assignment |
+| POST | `/api/connections` | Create a connection (prerequisite/recommended/related) |
+| DELETE | `/api/connections/{id}` | Delete a connection |
+| GET | `/api/learning-paths` | Full curriculum graph (nodes + edges) |
+| | **Dashboard** | |
 | GET | `/api/dashboard/stats` | Global platform statistics |
+| GET | `/api/dashboard/quality` | Completeness + review + conformance metrics |
 | GET | `/api/dashboard/top-assignments` | Most-downloaded assignments |
-| GET | `/api/dashboard/recent-feedback` | Latest feedback across all assignments |
+| GET | `/api/dashboard/recent-feedback` | Latest feedback |
+| GET | `/api/dashboard/pending-reviews` | Assignments needing review attention |
 | GET | `/api/dashboard/tag-cloud` | Tag frequency counts |
+| GET | `/api/dashboard/subject-areas` | Dynamic list of subjects in use |
 
 ---
 
